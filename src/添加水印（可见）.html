@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>前端不可见水印示例（改进版 - 修复乱码）</title>
+  <style>
+    .container { max-width: 800px; margin: 20px auto; padding: 20px; }
+    .controls { margin: 10px 0; }
+    canvas { border: 1px solid #ccc; max-width: 100%; }
+    .result { margin: 10px 0; padding: 10px; background-color: #f0f0f0; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h3>前端不可见水印（LSB算法 - 支持中文 - 修复乱码版）</h3>
+    <div class="controls">
+      <input type="file" id="imageInput" accept="image/*">
+      <input type="text" id="watermarkText" placeholder="输入水印文本" value="版权所有 © 2024">
+      <button onclick="embedWatermark()">嵌入水印</button>
+      <button onclick="extractWatermark()">提取水印</button>
+      <button onclick="testWatermark()" style="background-color: #007bff; color: white;">测试功能</button>
+    </div>
+    <canvas id="canvas"></canvas>
+    <div id="result" class="result"></div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const resultDiv = document.getElementById('result');
+
+    // 文本转二进制（支持UTF-8）
+    function textToBits(text) {
+      try {
+        // 使用TextEncoder将文本转换为UTF-8字节
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(text);
+        
+        const bits = [];
+        // 添加字节长度（32位整数，支持更长文本）
+        const length = bytes.length;
+        for (let i = 31; i >= 0; i--) {
+          bits.push((length >> i) & 1);
+        }
+        
+        // 添加字节内容
+        for (let i = 0; i < bytes.length; i++) {
+          const byte = bytes[i];
+          for (let j = 7; j >= 0; j--) {
+            bits.push((byte >> j) & 1);
+          }
+        }
+        
+        // 添加结束标志（8个1）
+        for (let i = 0; i < 8; i++) {
+          bits.push(1);
+        }
+        
+        return bits;
+      } catch (error) {
+        console.error('文本转二进制失败:', error);
+        throw new Error('文本编码处理失败，请检查输入内容');
+      }
+    }
+
+    // 二进制转文本（支持UTF-8）
+    function bitsToText(bits) {
+      try {
+        // 检查最少位数
+        if (bits.length < 40) { // 至少需要32位长度 + 8位结束标志
+          throw new Error('数据太短，无法解码');
+        }
+        
+        // 读取前32位作为字节长度
+        let length = 0;
+        for (let i = 0; i < 32; i++) {
+          length = (length << 1) | bits[i];
+        }
+        
+        // 验证长度的合理性
+        if (length <= 0 || length > 10000) { // 限制最大长度防止内存溢出
+          throw new Error(`无效的数据长度: ${length}`);
+        }
+        
+        // 检查是否有足够的位数
+        const requiredBits = 32 + length * 8 + 8; // 长度 + 数据 + 结束标志
+        if (bits.length < requiredBits) {
+          throw new Error(`数据不完整，需要${requiredBits}位，实际${bits.length}位`);
+        }
+        
+        // 提取字节数据
+        const bytes = new Uint8Array(length);
+        for (let i = 0; i < length; i++) {
+          let byte = 0;
+          for (let j = 0; j < 8; j++) {
+            byte = (byte << 1) | bits[32 + i * 8 + j];
+          }
+          bytes[i] = byte;
+        }
+        
+        // 验证结束标志（8个连续的1）
+        const endMarkerStart = 32 + length * 8;
+        for (let i = 0; i < 8; i++) {
+          if (bits[endMarkerStart + i] !== 1) {
+            throw new Error('结束标志验证失败，水印可能已损坏');
+          }
+        }
+        
+        // 使用TextDecoder将字节转换回文本
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        return decoder.decode(bytes);
+      } catch (error) {
+        console.error('二进制转文本失败:', error);
+        throw new Error(`水印解码失败: ${error.message}`);
+      }
+    }
+
+    // 嵌入水印
+    async function embedWatermark() {
+      const file = document.getElementById('imageInput').files[0];
+      const watermarkText = document.getElementById('watermarkText').value;
+      
+      if (!file) {
+        resultDiv.innerHTML = '<span class="error">请选择图片</span>';
+        return;
+      }
+      
+      if (!watermarkText) {
+        resultDiv.innerHTML = '<span class="error">请输入水印文本</span>';
+        return;
+      }
+
+      try {
+        // 显示加载状态
+        resultDiv.textContent = '正在处理图片...';
+        
+        // 加载图片
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        await new Promise(resolve => img.onload = resolve);
+        
+        // 设置Canvas尺寸
+        canvas.width = img.width;
+        canvas.height = img.height;
+        
+        // 绘制原图
+        ctx.drawImage(img, 0, 0);
+        
+        // 获取像素数据
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const pixels = imageData.data;
+        
+        // 文本转二进制
+        const watermarkBits = textToBits(watermarkText);
+        
+        // 检查是否有足够的像素存储水印
+        const maxBits = pixels.length / 4 * 3;
+        if (watermarkBits.length > maxBits) {
+          const requiredPixels = Math.ceil(watermarkBits.length * 4 / 3);
+          resultDiv.innerHTML = `<span class="error">水印文本太长，图片容量不足。需要至少 ${requiredPixels} 像素的图片</span>`;
+          return;
+        }
+        
+        // 嵌入水印到像素最低位
+        let bitIndex = 0;
+        for (let i = 0; i < pixels.length && bitIndex < watermarkBits.length; i += 4) {
+          for (let c = 0; c < 3; c++) { // 只处理R、G、B通道
+            if (bitIndex < watermarkBits.length) {
+              // 清除最低位并设置为水印位
+              pixels[i + c] = (pixels[i + c] & 0xFE) | watermarkBits[bitIndex];
+              bitIndex++;
+            }
+          }
+        }
+        
+        // 更新Canvas
+        ctx.putImageData(imageData, 0, 0);
+        
+        // 确保以无损格式保存（PNG）
+        const link = document.createElement('a');
+        link.href = canvas.toDataURL('image/png', 1.0); // 质量设为最高
+        link.download = 'watermarked.png';
+        link.textContent = '下载带水印图片 (PNG格式)';
+        link.style.display = 'block';
+        link.style.marginTop = '10px';
+        link.style.padding = '8px 16px';
+        link.style.backgroundColor = '#4CAF50';
+        link.style.color = 'white';
+        link.style.textDecoration = 'none';
+        link.style.borderRadius = '4px';
+        
+        resultDiv.innerHTML = '<span style="color: green;">✅ 水印已成功嵌入到图片中</span>';
+        resultDiv.appendChild(link);
+        
+        // 显示详细的水印统计信息
+        const info = document.createElement('div');
+        info.style.marginTop = '10px';
+        info.style.fontSize = '14px';
+        info.innerHTML = `
+          <strong>水印信息:</strong><br/>
+          • 原始文本: "${watermarkText}"<br/>
+          • 字符数量: ${watermarkText.length} 个<br/>
+          • UTF-8字节: ${new TextEncoder().encode(watermarkText).length} 字节<br/>
+          • 占用位数: ${watermarkBits.length} 位<br/>
+          • 使用像素: ${Math.ceil(watermarkBits.length/3)} 个<br/>
+          • 图片容量: ${Math.floor(pixels.length/4*3)} 位 (利用率: ${(watermarkBits.length/(pixels.length/4*3)*100).toFixed(2)}%)
+        `;
+        resultDiv.appendChild(info);
+        
+        // 添加重要提示
+        const warning = document.createElement('div');
+        warning.style.marginTop = '10px';
+        warning.style.padding = '8px';
+        warning.style.backgroundColor = '#fff3cd';
+        warning.style.border = '1px solid #ffeeba';
+        warning.style.borderRadius = '4px';
+        warning.style.fontSize = '12px';
+        warning.innerHTML = `
+          <strong>⚠️ 重要提示:</strong><br/>
+          • 请保存为PNG格式以保持水印完整性<br/>
+          • 避免再次压缩或格式转换<br/>
+          • JPEG等有损格式会破坏水印数据
+        `;
+        resultDiv.appendChild(warning);
+      } catch (error) {
+        resultDiv.innerHTML = `<span class="error">嵌入水印失败: ${error.message}</span>`;
+        console.error('嵌入水印错误:', error);
+      }
+    }
+
+    // 提取水印
+    async function extractWatermark() {
+      const file = document.getElementById('imageInput').files[0];
+      
+      if (!file) {
+        resultDiv.innerHTML = '<span class="error">请选择带水印的图片</span>';
+        return;
+      }
+
+      try {
+        // 显示加载状态
+        resultDiv.textContent = '正在提取水印...';
+        
+        // 加载图片
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        await new Promise(resolve => img.onload = resolve);
+        
+        // 设置Canvas尺寸
+        canvas.width = img.width;
+        canvas.height = img.height;
+        
+        // 绘制原图
+        ctx.drawImage(img, 0, 0);
+        
+        // 获取像素数据
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const pixels = imageData.data;
+        
+        // 从像素中提取二进制水印
+        const extractedBits = [];
+        let endMarkerFound = false;
+        let consecutiveOnes = 0;
+        let processedPixels = 0;
+        
+        for (let i = 0; i < pixels.length && !endMarkerFound; i += 4) {
+          processedPixels++;
+          for (let c = 0; c < 3; c++) { // 只处理R、G、B通道
+            const bit = pixels[i + c] & 1; // 获取最低位
+            extractedBits.push(bit);
+            
+            // 检查是否找到结束标志（8个连续的1）
+            if (bit === 1) {
+              consecutiveOnes++;
+              if (consecutiveOnes === 8) {
+                endMarkerFound = true;
+                // 移除刚添加的结束标志位，只保留数据部分
+                for (let j = 0; j < 8; j++) {
+                  extractedBits.pop();
+                }
+                break;
+              }
+            } else {
+              consecutiveOnes = 0;
+            }
+          }
+        }
+        
+        if (!endMarkerFound) {
+          // 尝试智能检测：基于长度字段计算预期的数据长度
+          if (extractedBits.length >= 32) {
+            try {
+              // 读取前32位作为长度
+              let length = 0;
+              for (let i = 0; i < 32; i++) {
+                length = (length << 1) | extractedBits[i];
+              }
+              
+              // 检查长度是否合理
+              if (length > 0 && length <= 1000) {
+                const expectedTotalBits = 32 + length * 8;
+                if (extractedBits.length >= expectedTotalBits) {
+                  // 截取到预期长度，并添加结束标志进行解码
+                  const validBits = extractedBits.slice(0, expectedTotalBits);
+                  // 添加结束标志用于验证
+                  for (let i = 0; i < 8; i++) {
+                    validBits.push(1);
+                  }
+                  
+                  const extractedText = bitsToText(validBits);
+                  resultDiv.innerHTML = `<span style="color: orange;">智能提取的水印文本: "${extractedText}"</span>`;
+                  
+                  const info = document.createElement('div');
+                  info.textContent = `注意：未找到完整结束标志，使用智能检测模式提取`;
+                  resultDiv.appendChild(info);
+              return;
+                }
+              }
+            } catch (e) {
+              console.error('智能提取失败:', e);
+            }
+          }
+          
+          resultDiv.innerHTML = '<span class="error">未找到水印或水印已损坏。请确保：<br/>1. 图片包含水印<br/>2. 图片未经过压缩处理<br/>3. 图片格式为PNG</span>';
+          return;
+        }
+        
+        // 转换为文本
+        const extractedText = bitsToText(extractedBits);
+        
+        // 显示成功提取的结果
+        resultDiv.innerHTML = '<span style="color: green;">✅ 水印提取成功!</span>';
+        
+        // 显示提取的文本
+        const textResult = document.createElement('div');
+        textResult.style.marginTop = '10px';
+        textResult.style.padding = '10px';
+        textResult.style.backgroundColor = '#d4edda';
+        textResult.style.border = '1px solid #c3e6cb';
+        textResult.style.borderRadius = '4px';
+        textResult.innerHTML = `<strong>提取的水印文本:</strong><br/>"${extractedText}"`;
+        resultDiv.appendChild(textResult);
+        
+        // 显示详细的提取统计信息
+        const info = document.createElement('div');
+        info.style.marginTop = '10px';
+        info.style.fontSize = '14px';
+        const dataLength = new TextEncoder().encode(extractedText).length;
+        info.innerHTML = `
+          <strong>提取统计:</strong><br/>
+          • 处理像素: ${processedPixels} 个<br/>
+          • 提取数据: ${extractedBits.length} 位<br/>
+          • 字符数量: ${extractedText.length} 个<br/>
+          • UTF-8字节: ${dataLength} 字节<br/>
+          • 数据完整: 是 (找到结束标志)
+        `;
+        resultDiv.appendChild(info);
+      } catch (error) {
+        resultDiv.innerHTML = `<span class="error">提取水印失败: ${error.message}</span>`;
+        console.error('提取水印错误:', error);
+      }
+    }
+
+    // 测试水印功能
+    async function testWatermark() {
+      try {
+        resultDiv.textContent = '正在生成测试图片并测试水印功能...';
+        
+        // 创建一个测试图片（纯色图片）
+        const testCanvas = document.createElement('canvas');
+        testCanvas.width = 200;
+        testCanvas.height = 150;
+        const testCtx = testCanvas.getContext('2d');
+        
+        // 填充渐变背景
+        const gradient = testCtx.createLinearGradient(0, 0, 200, 150);
+        gradient.addColorStop(0, '#4CAF50');
+        gradient.addColorStop(1, '#45a049');
+        testCtx.fillStyle = gradient;
+        testCtx.fillRect(0, 0, 200, 150);
+        
+        // 添加一些文字让图片更有特征
+        testCtx.fillStyle = 'white';
+        testCtx.font = '16px Arial';
+        testCtx.textAlign = 'center';
+        testCtx.fillText('测试图片', 100, 75);
+        testCtx.font = '12px Arial';
+        testCtx.fillText('Test Image', 100, 95);
+        
+        // 设置主Canvas
+        canvas.width = testCanvas.width;
+        canvas.height = testCanvas.height;
+        ctx.drawImage(testCanvas, 0, 0);
+        
+        // 测试水印文本
+        const testText = '测试水印 🔒 Test 123';
+        
+        // 嵌入水印
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const pixels = imageData.data;
+        const watermarkBits = textToBits(testText);
+        
+        // 检查容量
+        const maxBits = pixels.length / 4 * 3;
+        if (watermarkBits.length > maxBits) {
+          resultDiv.innerHTML = '<span class="error">测试失败：测试图片容量不足</span>';
+          return;
+        }
+        
+        // 嵌入水印
+        let bitIndex = 0;
+        for (let i = 0; i < pixels.length && bitIndex < watermarkBits.length; i += 4) {
+          for (let c = 0; c < 3; c++) {
+            if (bitIndex < watermarkBits.length) {
+              pixels[i + c] = (pixels[i + c] & 0xFE) | watermarkBits[bitIndex];
+              bitIndex++;
+            }
+          }
+        }
+        
+        // 更新Canvas
+        ctx.putImageData(imageData, 0, 0);
+        
+        // 立即提取水印进行验证
+        const verifyImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const verifyPixels = verifyImageData.data;
+        
+        // 提取水印位
+        const extractedBits = [];
+        let endMarkerFound = false;
+        let consecutiveOnes = 0;
+        
+        for (let i = 0; i < verifyPixels.length && !endMarkerFound; i += 4) {
+          for (let c = 0; c < 3; c++) {
+            const bit = verifyPixels[i + c] & 1;
+            extractedBits.push(bit);
+            
+            if (bit === 1) {
+              consecutiveOnes++;
+              if (consecutiveOnes === 8) {
+                endMarkerFound = true;
+                for (let j = 0; j < 8; j++) {
+                  extractedBits.pop();
+                }
+                break;
+              }
+            } else {
+              consecutiveOnes = 0;
+            }
+          }
+        }
+        
+        if (!endMarkerFound) {
+          resultDiv.innerHTML = '<span class="error">测试失败：未找到结束标志</span>';
+          return;
+        }
+        
+        // 解码水印
+        const extractedText = bitsToText(extractedBits);
+        
+        // 验证结果
+        const success = extractedText === testText;
+        
+        if (success) {
+          resultDiv.innerHTML = '<span style="color: green;">✅ 测试成功！水印功能正常工作</span>';
+          
+          const details = document.createElement('div');
+          details.style.marginTop = '10px';
+          details.style.padding = '10px';
+          details.style.backgroundColor = '#d4edda';
+          details.style.border = '1px solid #c3e6cb';
+          details.style.borderRadius = '4px';
+          details.innerHTML = `
+            <strong>测试结果:</strong><br/>
+            • 原始文本: "${testText}"<br/>
+            • 提取文本: "${extractedText}"<br/>
+            • 匹配结果: ✅ 完全匹配<br/>
+            • 处理位数: ${watermarkBits.length} 位<br/>
+            • 图片尺寸: ${canvas.width}×${canvas.height}
+          `;
+          resultDiv.appendChild(details);
+        } else {
+          resultDiv.innerHTML = '<span class="error">❌ 测试失败：提取的水印不匹配</span>';
+          
+          const details = document.createElement('div');
+          details.style.marginTop = '10px';
+          details.innerHTML = `
+            原始: "${testText}"<br/>
+            提取: "${extractedText}"
+          `;
+          resultDiv.appendChild(details);
+        }
+        
+      } catch (error) {
+        resultDiv.innerHTML = `<span class="error">测试失败: ${error.message}</span>`;
+        console.error('测试错误:', error);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>二进制水印（LSB算法）</title>
+  <style>
+    .container { max-width: 800px; margin: 20px auto; padding: 20px; }
+    .result { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+    button { margin: 10px 5px; padding: 8px 16px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h3>图片二进制水印（不可见）</h3>
+    <input type="file" accept="image/*" id="imgInput" />
+    <input type="text" id="watermarkText" placeholder="输入水印文本（如版权信息）" value="Copyright 2024" />
+    <button onclick="embedWatermark()">嵌入水印</button>
+    <button onclick="extractWatermark()">提取水印</button>
+    <div class="result" id="result"></div>
+    <canvas id="canvas" style="max-width: 100%;"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const resultDiv = document.getElementById('result');
+
+    // 嵌入水印到图片二进制数据
+    async function embedWatermark() {
+      const file = document.getElementById('imgInput').files[0];
+      const watermark = document.getElementById('watermarkText').value;
+      if (!file || !watermark) {
+        resultDiv.textContent = '请选择图片并输入水印文本';
+        return;
+      }
+
+      // 1. 加载图片并获取像素数据
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      await new Promise(resolve => img.onload = resolve);
+      
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data; // Uint8ClampedArray，存储RGBA像素
+
+      // 2. 水印文本转二进制（带长度前缀和结束标志）
+      // 前缀：2字节表示水印长度（最多65535字符），避免提取时歧义
+      const watermarkBytes = new TextEncoder().encode(watermark);
+      const lengthPrefix = new Uint16Array([watermarkBytes.length]); // 2字节长度
+      const binaryData = new Uint8Array([...lengthPrefix, ...watermarkBytes]);
+      
+      // 3. 嵌入二进制数据到像素LSB（最低位）
+      let bitIndex = 0;
+      const totalBits = binaryData.length * 8;
+      
+      // 检查像素是否足够存储水印
+      if (totalBits > pixels.length * 3) { // 每个像素3个通道（RGB）可存储3位
+        resultDiv.textContent = '水印过长，无法嵌入（请选择更大图片或缩短水印）';
+        return;
+      }
+      
+      // 遍历像素，修改RGB通道的最低位
+      for (let i = 0; i < pixels.length && bitIndex < totalBits; i += 4) {
+        for (let c = 0; c < 3; c++) { // 只处理R、G、B通道（跳过Alpha）
+          if (bitIndex >= totalBits) break;
+          
+          // 提取当前字节的第bitIndex%8位
+          const byteIndex = Math.floor(bitIndex / 8);
+          const bit = (binaryData[byteIndex] >> (7 - (bitIndex % 8))) & 1;
+          
+          // 修改像素通道的最低位（保留高7位，替换最低位）
+          pixels[i + c] = (pixels[i + c] & 0xFE) | bit;
+          bitIndex++;
+        }
+      }
+
+      // 4. 绘制修改后的图片并提供下载
+      ctx.putImageData(imageData, 0, 0);
+      canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'watermarked-image.png';
+        a.click();
+        resultDiv.textContent = '水印嵌入成功，图片已下载';
+      }, 'image/png');
+    }
+
+    // 从图片中提取水印
+    async function extractWatermark() {
+      const file = document.getElementById('imgInput').files[0];
+      if (!file) {
+        resultDiv.textContent = '请选择带水印的图片';
+        return;
+      }
+
+      // 1. 加载图片并获取像素数据
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      await new Promise(resolve => img.onload = resolve);
+      
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+
+      // 2. 从像素LSB提取二进制数据
+      // 先提取2字节长度前缀（16位）
+      const lengthBits = 16;
+      let lengthBytes = new Uint8Array(2);
+      
+      let bitIndex = 0;
+      for (let i = 0; i < lengthBits; i++) {
+        const pixelIndex = Math.floor(bitIndex / 3) * 4; // 每3位对应一个像素（RGB）
+        const channel = (bitIndex % 3); // 0=R, 1=G, 2=B
+        const bit = (pixels[pixelIndex + channel] & 1); // 提取最低位
+        
+        // 写入长度字节的对应位
+        const bytePos = Math.floor(i / 8);
+        const bitPos = 7 - (i % 8);
+        lengthBytes[bytePos] |= (bit << bitPos);
+        
+        bitIndex++;
+      }
+      
+      const watermarkLength = new Uint16Array(lengthBytes.buffer)[0]; // 水印长度
+      if (watermarkLength === 0) {
+        resultDiv.textContent = '未检测到水印';
+        return;
+      }
+      
+      // 3. 提取水印内容（watermarkLength字节）
+      const totalBits = watermarkLength * 8;
+      const watermarkBytes = new Uint8Array(watermarkLength);
+      
+      for (let i = 0; i < totalBits; i++) {
+        const pixelIndex = Math.floor(bitIndex / 3) * 4;
+        const channel = (bitIndex % 3);
+        const bit = (pixels[pixelIndex + channel] & 1);
+        
+        const bytePos = Math.floor(i / 8);
+        const bitPos = 7 - (i % 8);
+        watermarkBytes[bytePos] |= (bit << bitPos);
+        
+        bitIndex++;
+      }
+      
+      // 4. 解码水印文本
+      const watermark = new TextDecoder().decode(watermarkBytes);
+      resultDiv.textContent = `提取到水印：${watermark}`;
+    }
+  </script>
+</body>
+</html>
