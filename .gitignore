@@ -1,0 +1,13 @@
+
+__dist
+.DS_Store
+.stylelintcache
+.tmp
+/docs
+/docs.DS_Store
+coverage
+dist
+node_modules
+output
+package-*
+types
