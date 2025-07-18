@@ -157,6 +157,11 @@
     
     <div class="controls">
       <label>
+        起始时间（秒）
+        <input type="number" id="startTime" value="0" min="0" step="0.1">
+        <div class="quality-tip">从视频的第几秒开始提取</div>
+      </label>
+      <label>
         截取时长（秒）
         <input type="number" id="duration" value="3" min="1" max="15">
         <div class="quality-tip">建议3-6秒获得最佳质量</div>
@@ -201,6 +206,7 @@
   <script>
     const videoInput = document.getElementById('videoInput');
     const video = document.getElementById('video');
+    const startTimeInput = document.getElementById('startTime');
     const durationInput = document.getElementById('duration');
     const fpsInput = document.getElementById('fps');
     const scaleInput = document.getElementById('scale');
@@ -245,6 +251,8 @@
         if (video.videoWidth > 0 && video.videoHeight > 0) {
           showStatus(`✅ 视频已加载：${video.videoWidth}×${video.videoHeight}，时长${video.duration.toFixed(1)}秒`, 'success');
           convertBtn.disabled = false;
+          // 更新起始时间的最大值
+          startTimeInput.max = Math.max(0, video.duration - 0.5);
         } else {
           showStatus('❌ 视频格式不支持或文件损坏', 'error');
           convertBtn.disabled = true;
@@ -263,13 +271,22 @@
       try {
         convertBtn.disabled = true;
         
+        const startTime = parseFloat(startTimeInput.value);
         const duration = parseInt(durationInput.value);
         const fps = parseInt(fpsInput.value);
         const scale = parseFloat(scaleInput.value);
         const quality = qualitySelect.value;
         
+        if (isNaN(startTime) || startTime < 0) {
+          throw new Error('请输入有效的起始时间（≥0秒）');
+        }
+        
         if (isNaN(duration) || duration <= 0 || duration > 15) {
           throw new Error('请输入有效的截取时长（1-15秒）');
+        }
+        
+        if (startTime + duration > video.duration) {
+          throw new Error(`起始时间+截取时长不能超过视频总时长（${video.duration.toFixed(1)}秒）`);
         }
         
         if (isNaN(fps) || fps <= 4 || fps > 20) {
@@ -294,14 +311,14 @@
         canvas.width = Math.floor(video.videoWidth * scale);
         canvas.height = Math.floor(video.videoHeight * scale);
 
-        showStatus(`🎬 正在捕获${totalFrames}帧...`);
+        showStatus(`🎬 正在从${startTime.toFixed(1)}秒开始捕获${totalFrames}帧...`);
         gifResult.querySelector('.gif-preview').innerHTML = '';
 
         const frames = [];
 
         // 逐帧捕获
         for (let i = 0; i < totalFrames; i++) {
-          const currentTime = Math.min(i * frameStep, video.duration - 0.1);
+          const currentTime = Math.min(startTime + i * frameStep, video.duration - 0.1);
           video.currentTime = currentTime;
 
           await new Promise((resolve, reject) => {
@@ -325,7 +342,7 @@
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           frames.push(imageData);
           
-          showStatus(`🎬 捕获中... ${i+1}/${totalFrames} (${Math.round((i+1)/totalFrames*100)}%)`);
+          showStatus(`🎬 捕获中... ${i+1}/${totalFrames} (${Math.round((i+1)/totalFrames*100)}%) - 时间:${currentTime.toFixed(1)}s`);
         }
 
         showStatus('🔄 正在生成GIF文件...');
@@ -346,7 +363,7 @@
           downloadBtn.className = 'download-btn';
           preview.appendChild(downloadBtn);
           
-          showStatus(`✅ 高质量GIF生成完成！尺寸：${canvas.width}×${canvas.height}，大小：${(gifBlob.size / 1024).toFixed(1)}KB`, 'success');
+          showStatus(`✅ 高质量GIF生成完成！时间段：${startTime.toFixed(1)}-${(startTime + duration).toFixed(1)}秒，尺寸：${canvas.width}×${canvas.height}，大小：${(gifBlob.size / 1024).toFixed(1)}KB`, 'success');
         };
         
         img.onerror = () => showStatus('❌ GIF预览失败', 'error');
@@ -962,10 +979,20 @@
       }
     }
 
+    // 起始时间变化时预览
+    startTimeInput.addEventListener('input', () => {
+      if (video.src && video.duration > 0) {
+        const startTime = parseFloat(startTimeInput.value);
+        if (!isNaN(startTime) && startTime >= 0 && startTime < video.duration) {
+          video.currentTime = startTime;
+        }
+      }
+    });
+
     // 页面加载完成
     window.addEventListener('load', () => {
       setTimeout(() => {
-        showStatus('✅ 高质量防失真GIF生成器已就绪！', 'success');
+        showStatus('✅ 高质量防失真GIF生成器已就绪！支持任意时间段提取！', 'success');
       }, 500);
     });
   </script>
