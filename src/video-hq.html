@@ -204,39 +204,115 @@
   </div>
 
   <script>
-    const videoInput = document.getElementById('videoInput');
-    const video = document.getElementById('video');
-    const startTimeInput = document.getElementById('startTime');
-    const durationInput = document.getElementById('duration');
-    const fpsInput = document.getElementById('fps');
-    const scaleInput = document.getElementById('scale');
-    const qualitySelect = document.getElementById('quality');
-    const statusDiv = document.getElementById('status');
-    const gifResult = document.getElementById('gifResult');
-    const convertBtn = document.getElementById('convertBtn');
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    // =====================================================================================
+    // 🎬 视频转GIF完整流程总结 - Video to GIF Complete Workflow Summary
+    // =====================================================================================
+    //
+    // 【核心流程概述】
+    // 本工具实现了从视频文件到高质量GIF动画的完整转换流程，支持任意时间段提取。
+    //
+    // 【详细处理步骤】
+    // 
+    // 1️⃣ 【文件处理阶段】
+    //    ├─ 用户选择视频文件 → 文件类型验证 → 大小限制检查(100MB)
+    //    ├─ 创建视频对象URL → 加载视频元数据 → 获取尺寸和时长信息
+    //    └─ 动态设置UI限制(起始时间最大值等)
+    //
+    // 2️⃣ 【参数配置阶段】
+    //    ├─ 起始时间设置(支持任意时间点开始)
+    //    ├─ 截取时长配置(1-15秒) 
+    //    ├─ 帧率选择(5-20fps)
+    //    ├─ 缩放比例(0.4-1.0)
+    //    └─ 质量等级(超高/高/中等质量)
+    //
+    // 3️⃣ 【视频帧捕获阶段】
+    //    ├─ 计算总帧数和时间间隔 → 验证帧数限制(最大100帧)
+    //    ├─ 设置Canvas尺寸(根据缩放比例)
+    //    ├─ 逐帧处理循环:
+    //    │  ├─ 视频跳转到指定时间点 → 等待帧数据准备就绪
+    //    │  ├─ 高质量绘制到Canvas(启用平滑处理)
+    //    │  ├─ 获取ImageData像素数据 → 存储到帧数组
+    //    │  └─ 显示捕获进度(包含当前时间点)
+    //    └─ 完成所有帧的捕获和存储
+    //
+    // 4️⃣ 【GIF编码阶段】
+    //    ├─ 🎨 调色板生成: 统计所有帧颜色频率 → 选择最常用256色 → 构建调色板
+    //    ├─ 🔄 颜色转换: RGB像素 → 量化处理 → 调色板索引映射 → 最近色匹配
+    //    ├─ 📦 LZW压缩: 索引数据 → 字典构建 → 位流编码 → 数据块分割
+    //    └─ 🏗️ GIF文件构建:
+    //       ├─ 文件头: GIF89a签名 → 逻辑屏幕描述符 → 全局颜色表
+    //       ├─ 扩展块: 循环播放设置(NETSCAPE2.0)
+    //       ├─ 帧数据: 图形控制扩展 → 图像描述符 → LZW压缩数据
+    //       └─ 文件尾: 结束标记(0x3B)
+    //
+    // 5️⃣ 【结果输出阶段】
+    //    ├─ 生成Blob对象 → 创建下载URL → 显示预览图像
+    //    ├─ 添加下载按钮(时间戳文件名)
+    //    └─ 显示完成信息(时间段、尺寸、文件大小)
+    //
+    // 【核心技术特性】
+    // ✨ 高质量算法: Floyd-Steinberg抖动、中位切分调色板、边缘保护
+    // ⚡ 性能优化: 颜色映射缓存、内存限制控制、异步处理防页面冻结  
+    // 🎯 精确控制: 任意时间段提取、实时预览、参数实时验证
+    // 🔧 标准兼容: 完整GIF89a格式支持、标准LZW压缩算法
+    //
+    // =====================================================================================
 
-    // 显示状态信息
+    // ==================================================
+    // DOM元素获取 - 获取页面中的各种输入控件和显示元素
+    // ==================================================
+    const videoInput = document.getElementById('videoInput');     // 视频文件输入框
+    const video = document.getElementById('video');               // 视频播放元素
+    const startTimeInput = document.getElementById('startTime');  // 起始时间输入框
+    const durationInput = document.getElementById('duration');    // 截取时长输入框
+    const fpsInput = document.getElementById('fps');              // 帧率输入框
+    const scaleInput = document.getElementById('scale');          // 缩放比例输入框
+    const qualitySelect = document.getElementById('quality');     // 图像质量选择框
+    const statusDiv = document.getElementById('status');          // 状态显示区域
+    const gifResult = document.getElementById('gifResult');       // GIF结果显示区域
+    const convertBtn = document.getElementById('convertBtn');     // 转换按钮
+    const canvas = document.createElement('canvas');              // 用于视频帧捕获的画布
+    const ctx = canvas.getContext('2d');                          // 画布绘图上下文
+
+    // ==================================================
+    // 工具函数 - 辅助功能函数
+    // ==================================================
+    
+    /**
+     * 显示状态信息
+     * @param {string} message - 要显示的消息内容
+     * @param {string} type - 消息类型: 'info'(默认), 'error', 'success'
+     */
     function showStatus(message, type = 'info') {
       statusDiv.textContent = message;
       statusDiv.className = `status ${type}`;
     }
 
-    // 加载视频
+    // ==================================================
+    // 视频文件处理 - 处理用户选择的视频文件
+    // ==================================================
+    
+    /**
+     * 视频文件选择事件监听器
+     * 当用户选择视频文件时触发，进行文件验证和加载
+     */
     videoInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
+      
+      // 检查是否选择了文件
       if (!file) {
         convertBtn.disabled = true;
         return;
       }
       
+      // 验证文件类型是否为视频
       if (!file.type.startsWith('video/')) {
         showStatus('❌ 请选择有效的视频文件', 'error');
         convertBtn.disabled = true;
         return;
       }
       
+      // 检查文件大小限制（100MB以内）
       if (file.size > 100 * 1024 * 1024) {
         showStatus('❌ 视频文件过大，请选择小于100MB的文件', 'error');
         convertBtn.disabled = true;
@@ -244,14 +320,19 @@
       }
       
       showStatus('📹 正在加载视频...');
+      
+      // 创建视频对象URL并设置到video元素
       const videoUrl = URL.createObjectURL(file);
       video.src = videoUrl;
       
+      // 视频元数据加载完成事件
       video.onloadedmetadata = () => {
+        // 验证视频是否有效（宽高大于0）
         if (video.videoWidth > 0 && video.videoHeight > 0) {
           showStatus(`✅ 视频已加载：${video.videoWidth}×${video.videoHeight}，时长${video.duration.toFixed(1)}秒`, 'success');
           convertBtn.disabled = false;
-          // 更新起始时间的最大值
+          
+          // 动态设置起始时间的最大值（留0.5秒缓冲）
           startTimeInput.max = Math.max(0, video.duration - 0.5);
         } else {
           showStatus('❌ 视频格式不支持或文件损坏', 'error');
@@ -259,264 +340,352 @@
         }
       };
       
+      // 视频加载错误事件
       video.onerror = () => {
         showStatus('❌ 视频加载失败，请检查文件格式', 'error');
         convertBtn.disabled = true;
-        URL.revokeObjectURL(videoUrl);
+        URL.revokeObjectURL(videoUrl);  // 清理对象URL避免内存泄漏
       };
     });
 
-    // 生成GIF核心逻辑
+    // ==================================================
+    // GIF生成核心功能 - 主要的视频转GIF处理逻辑
+    // ==================================================
+    
+    /**
+     * 开始转换视频为GIF
+     * 主要流程：参数验证 -> 逐帧捕获 -> GIF编码 -> 结果显示
+     */
     async function startConvert() {
       try {
+        // 禁用转换按钮防止重复点击
         convertBtn.disabled = true;
         
-        const startTime = parseFloat(startTimeInput.value);
-        const duration = parseInt(durationInput.value);
-        const fps = parseInt(fpsInput.value);
-        const scale = parseFloat(scaleInput.value);
-        const quality = qualitySelect.value;
+        // 获取用户设置的各项参数
+        const startTime = parseFloat(startTimeInput.value);  // 起始时间
+        const duration = parseInt(durationInput.value);      // 截取时长
+        const fps = parseInt(fpsInput.value);                // 帧率
+        const scale = parseFloat(scaleInput.value);          // 缩放比例
+        const quality = qualitySelect.value;                 // 图像质量
         
+        // ==================== 参数验证 ====================
+        
+        // 验证起始时间
         if (isNaN(startTime) || startTime < 0) {
           throw new Error('请输入有效的起始时间（≥0秒）');
         }
         
+        // 验证截取时长
         if (isNaN(duration) || duration <= 0 || duration > 15) {
           throw new Error('请输入有效的截取时长（1-15秒）');
         }
         
+        // 验证时间范围不超过视频总长度
         if (startTime + duration > video.duration) {
           throw new Error(`起始时间+截取时长不能超过视频总时长（${video.duration.toFixed(1)}秒）`);
         }
         
+        // 验证帧率范围
         if (isNaN(fps) || fps <= 4 || fps > 20) {
           throw new Error('请输入有效的帧率（5-20fps）');
         }
         
+        // 验证缩放比例
         if (isNaN(scale) || scale <= 0.3 || scale > 1) {
           throw new Error('请输入有效的缩放比例（0.4-1.0）');
         }
         
-        const totalFrames = duration * fps;
-        const frameStep = 1 / fps;
+        // ==================== 计算帧参数 ====================
+        
+        const totalFrames = duration * fps;  // 总帧数
+        const frameStep = 1 / fps;           // 每帧时间间隔
 
+        // 验证视频状态
         if (!video.src || video.duration === 0) {
           throw new Error('视频未正确加载，请重新选择文件');
         }
         
+        // 限制最大帧数防止内存问题
         if (totalFrames > 100) {
           throw new Error('帧数过多，请减小时长或帧率（最大100帧）');
         }
 
+        // 设置画布尺寸（根据缩放比例）
         canvas.width = Math.floor(video.videoWidth * scale);
         canvas.height = Math.floor(video.videoHeight * scale);
 
+        // 显示开始处理状态并清空之前的结果
         showStatus(`🎬 正在从${startTime.toFixed(1)}秒开始捕获${totalFrames}帧...`);
         gifResult.querySelector('.gif-preview').innerHTML = '';
 
+        // 存储捕获的所有帧数据
         const frames = [];
 
-        // 逐帧捕获
+        // ==================== 逐帧捕获视频内容 ====================
+        
         for (let i = 0; i < totalFrames; i++) {
+          // 计算当前帧对应的视频时间点
           const currentTime = Math.min(startTime + i * frameStep, video.duration - 0.1);
           video.currentTime = currentTime;
 
+          // 等待视频跳转到指定时间点并准备好
           await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('超时')), 5000);
+            const timeout = setTimeout(() => reject(new Error('视频帧加载超时')), 5000);
+            
             const checkFrame = () => {
+              // readyState >= 2 表示当前帧数据已准备好
               if (video.readyState >= 2) {
                 clearTimeout(timeout);
+                // 稍微延迟确保帧完全加载
                 setTimeout(resolve, 100);
               } else {
+                // 继续检查
                 requestAnimationFrame(checkFrame);
               }
             };
             checkFrame();
           });
 
-          // 使用高质量绘制
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
+          // 高质量绘制视频帧到画布
+          ctx.imageSmoothingEnabled = true;           // 启用平滑处理
+          ctx.imageSmoothingQuality = 'high';         // 使用高质量平滑算法
           ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, canvas.width, canvas.height);
 
+          // 获取画布图像数据并存储
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           frames.push(imageData);
           
+          // 显示捕获进度
           showStatus(`🎬 捕获中... ${i+1}/${totalFrames} (${Math.round((i+1)/totalFrames*100)}%) - 时间:${currentTime.toFixed(1)}s`);
         }
 
+        // ==================== 生成GIF文件 ====================
+        
         showStatus('🔄 正在生成GIF文件...');
+        
+        // 调用GIF编码算法生成二进制数据
         const gifBuffer = await createLocalGif(frames, fps);
         const gifBlob = new Blob([gifBuffer], { type: 'image/gif' });
         const gifUrl = URL.createObjectURL(gifBlob);
 
+        // 创建预览图像
         const img = new Image();
+        
+        // 图像加载成功后显示结果和下载链接
         img.onload = () => {
           const preview = gifResult.querySelector('.gif-preview');
           preview.innerHTML = '';
           preview.appendChild(img);
           
+          // 创建下载按钮
           const downloadBtn = document.createElement('a');
           downloadBtn.href = gifUrl;
-          downloadBtn.download = `hq-gif-${Date.now()}.gif`;
+          downloadBtn.download = `hq-gif-${Date.now()}.gif`;  // 使用时间戳作为文件名
           downloadBtn.textContent = '📥 下载高质量GIF';
           downloadBtn.className = 'download-btn';
           preview.appendChild(downloadBtn);
           
+          // 显示完成状态信息
           showStatus(`✅ 高质量GIF生成完成！时间段：${startTime.toFixed(1)}-${(startTime + duration).toFixed(1)}秒，尺寸：${canvas.width}×${canvas.height}，大小：${(gifBlob.size / 1024).toFixed(1)}KB`, 'success');
         };
         
+        // 图像加载失败处理
         img.onerror = () => showStatus('❌ GIF预览失败', 'error');
         img.src = gifUrl;
         
       } catch (error) {
+        // 捕获并显示任何处理过程中的错误
         showStatus(`❌ ${error.message}`, 'error');
       } finally {
+        // 无论成功失败都重新启用转换按钮
         convertBtn.disabled = false;
       }
     }
 
-    // 本地GIF生成算法（参考高清版）
+    // ==================================================
+    // GIF文件编码算法 - 将图像帧数据编码为标准GIF格式
+    // ==================================================
+    
+    /**
+     * 本地GIF生成算法（基于GIF89a标准）
+     * @param {Array} frames - 图像帧数据数组
+     * @param {number} fps - 帧率
+     * @returns {Uint8Array} 生成的GIF文件二进制数据
+     */
     async function createLocalGif(frames, fps) {
+      // 获取图像尺寸信息
       const width = frames[0].width;
       const height = frames[0].height;
-      const delay = Math.max(Math.round(100 / fps), 4); // 延迟时间（1/100秒）
+      const delay = Math.max(Math.round(100 / fps), 4); // 延迟时间（单位：1/100秒）
       
-      // 创建调色板
+      // 创建优化的256色调色板
       const palette = createOptimizedPalette(frames);
       const buffer = [];
       
-      // GIF文件头
+      // ==================== GIF文件头部信息 ====================
+      
+      // GIF89a文件签名
       buffer.push(...stringToBytes('GIF89a'));
       
-      // 逻辑屏幕描述符
+      // 逻辑屏幕描述符（7字节）
       buffer.push(
-        width & 0xFF, (width >> 8) & 0xFF,
-        height & 0xFF, (height >> 8) & 0xFF,
-        0xF7, // 全局颜色表标志=1，颜色分辨率=7，排序=0，颜色表大小=7（256色）
-        0, // 背景颜色索引
-        0  // 像素宽高比
+        width & 0xFF, (width >> 8) & 0xFF,         // 屏幕宽度（小端序）
+        height & 0xFF, (height >> 8) & 0xFF,       // 屏幕高度（小端序）
+        0xF7,                                       // 全局颜色表标志=1，颜色分辨率=7，排序=0，颜色表大小=7（256色）
+        0,                                          // 背景颜色索引
+        0                                           // 像素宽高比
       );
       
-      // 全局颜色表
+      // 全局颜色表（256色 × 3字节RGB = 768字节）
       buffer.push(...palette);
       
-      // 循环扩展
-      buffer.push(0x21, 0xFF, 0x0B);
-      buffer.push(...stringToBytes('NETSCAPE2.0'));
-      buffer.push(0x03, 0x01, 0x00, 0x00, 0x00); // 无限循环
+      // 应用扩展块：设置循环播放
+      buffer.push(0x21, 0xFF, 0x0B);                 // 应用扩展标识
+      buffer.push(...stringToBytes('NETSCAPE2.0'));  // 应用名称
+      buffer.push(0x03, 0x01, 0x00, 0x00, 0x00);     // 数据：无限循环
       
-      // 处理每一帧
+      // ==================== 处理每一帧图像数据 ====================
+      
       for (let i = 0; i < frames.length; i++) {
         showStatus(`🔄 正在处理第 ${i + 1}/${frames.length} 帧...`);
         
-        // 图形控制扩展
-        buffer.push(0x21, 0xF9, 0x04, 0x00);
-        buffer.push(delay & 0xFF, (delay >> 8) & 0xFF);
-        buffer.push(0x00, 0x00); // 透明色索引，块终止符
+        // 图形控制扩展块（控制帧的显示方式）
+        buffer.push(0x21, 0xF9, 0x04, 0x00);           // 扩展标识和标签
+        buffer.push(delay & 0xFF, (delay >> 8) & 0xFF); // 帧延迟时间（小端序）
+        buffer.push(0x00, 0x00);                        // 透明色索引，块终止符
         
-        // 图像描述符
-        buffer.push(0x2C);
-        buffer.push(0x00, 0x00, 0x00, 0x00); // 左上角位置
-        buffer.push(width & 0xFF, (width >> 8) & 0xFF);
-        buffer.push(height & 0xFF, (height >> 8) & 0xFF);
-        buffer.push(0x00); // 局部颜色表标志
+        // 图像描述符（描述当前帧的位置和尺寸）
+        buffer.push(0x2C);                              // 图像分隔符
+        buffer.push(0x00, 0x00, 0x00, 0x00);           // 图像左上角位置（x,y = 0,0）
+        buffer.push(width & 0xFF, (width >> 8) & 0xFF); // 图像宽度（小端序）
+        buffer.push(height & 0xFF, (height >> 8) & 0xFF); // 图像高度（小端序）
+        buffer.push(0x00);                              // 局部颜色表标志（使用全局颜色表）
         
-        // 转换图像数据
-        const indexedData = convertToIndexed(frames[i], palette);
-        const compressedData = compressLZW(indexedData);
+        // 图像数据处理：RGB -> 索引颜色 -> LZW压缩
+        const indexedData = convertToIndexed(frames[i], palette);  // 转换为调色板索引
+        const compressedData = compressLZW(indexedData);           // LZW压缩
         
-        // 输出压缩数据
-        buffer.push(8); // LZW最小代码大小
+        // 输出LZW压缩数据（按数据块格式）
+        buffer.push(8);  // LZW最小代码大小（8位）
+        
         let pos = 0;
         while (pos < compressedData.length) {
+          // 每个数据块最大255字节
           const blockSize = Math.min(255, compressedData.length - pos);
-          buffer.push(blockSize);
+          buffer.push(blockSize);  // 块大小
+          
+          // 输出块数据
           for (let j = 0; j < blockSize; j++) {
             buffer.push(compressedData[pos + j]);
           }
           pos += blockSize;
         }
-        buffer.push(0); // 块终止符
+        buffer.push(0);  // 数据块终止符
         
-        // 让浏览器有时间更新UI
+        // 定期让出控制权，防止页面冻结
         if (i % 3 === 0) {
           await new Promise(resolve => setTimeout(resolve, 1));
         }
       }
       
-      // GIF结束标记
+      // ==================== GIF文件结束 ====================
+      
+      // GIF文件结束标记
       buffer.push(0x3B);
       
+      // 返回完整的GIF文件二进制数据
       return new Uint8Array(buffer);
     }
 
-    // 创建优化的调色板（参考高清版）
+    // ==================================================
+    // 调色板生成算法 - 从图像帧中提取最优256色调色板
+    // ==================================================
+    
+    /**
+     * 创建优化的调色板
+     * 通过统计颜色频率，选择最常用的256种颜色作为调色板
+     * @param {Array} frames - 图像帧数组
+     * @returns {Array} 256色调色板数据（768字节RGB）
+     */
     function createOptimizedPalette(frames) {
       const colorMap = new Map();
       
-      // 统计所有颜色使用频率
+      // 统计所有帧中每种颜色的使用频率
       frames.forEach(frame => {
         const pixels = frame.data;
         for (let i = 0; i < pixels.length; i += 4) {
-          const r = pixels[i] & 0xF8; // 量化到5位
-          const g = pixels[i + 1] & 0xF8;
-          const b = pixels[i + 2] & 0xF8;
+          // 将RGB颜色量化到5位精度（减少颜色数量） 
+          // 保留颜色值的高5位：即颜色通道的主要有效信息。
+          // 丢弃低3位：相当于舍弃颜色的细节精度或噪声数据。
+          const r = pixels[i] & 0xF8;     // 提取红色通道的高5位
+          const g = pixels[i + 1] & 0xF8; //提取绿色通道的高5位
+          const b = pixels[i + 2] & 0xF8; // 提取蓝色通道的高5位
           const color = `${r},${g},${b}`;
+          
+          // 统计颜色出现次数
           colorMap.set(color, (colorMap.get(color) || 0) + 1);
         }
       });
       
-      // 选择最常用的256种颜色
+      // 按使用频率排序，选择最常用的256种颜色
       const sortedColors = Array.from(colorMap.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 256)
-        .map(([color]) => color.split(',').map(Number));
+        .sort((a, b) => b[1] - a[1])      // 按频率降序排列
+        .slice(0, 256)                    // 取前256种
+        .map(([color]) => color.split(',').map(Number));  // 转换为RGB数值
       
-      // 构建调色板
+      // 构建标准GIF调色板格式
       const palette = [];
       sortedColors.forEach(([r, g, b]) => {
-        palette.push(r, g, b);
+        palette.push(r, g, b);  // 按RGB顺序添加
       });
       
-      // 填充到256色
+      // 填充剩余位置到768字节（256色 × 3字节RGB）
       while (palette.length < 768) {
-        palette.push(0, 0, 0);
+        palette.push(0, 0, 0);  // 用黑色填充
       }
       
       return palette;
     }
 
-    // 将图像转换为索引颜色（参考高清版）
+    /**
+     * 将RGB图像转换为索引颜色
+     * 每个像素从RGB值转换为调色板中最接近颜色的索引
+     * @param {ImageData} frame - 图像帧数据
+     * @param {Array} palette - 调色板数据
+     * @returns {Array} 索引颜色数组
+     */
     function convertToIndexed(frame, palette) {
       const pixels = frame.data;
       const indexed = [];
-      const paletteMap = new Map();
+      const paletteMap = new Map();  // 缓存颜色映射关系，提高性能
       
-      // 构建调色板映射
+      // 构建调色板颜色到索引的映射表
       for (let i = 0; i < palette.length; i += 3) {
         const color = `${palette[i]},${palette[i + 1]},${palette[i + 2]}`;
-        paletteMap.set(color, i / 3);
+        paletteMap.set(color, i / 3);  // 颜色字符串 -> 调色板索引
       }
       
-      // 转换每个像素
+      // 逐像素转换：RGB -> 调色板索引
       for (let i = 0; i < pixels.length; i += 4) {
+        // 量化像素颜色（与调色板生成时保持一致）
         const r = pixels[i] & 0xF8;
         const g = pixels[i + 1] & 0xF8;
         const b = pixels[i + 2] & 0xF8;
         const color = `${r},${g},${b}`;
         
+        // 优先查找精确匹配
         let index = paletteMap.get(color);
         if (index === undefined) {
-          // 找最近似的颜色
+          // 没有精确匹配时，寻找最相似的颜色
           let minDist = Infinity;
           let bestIndex = 0;
           
+          // 计算与调色板中每种颜色的欧几里得距离
           for (let j = 0; j < palette.length; j += 3) {
             const dr = r - palette[j];
             const dg = g - palette[j + 1];
             const db = b - palette[j + 2];
-            const dist = dr * dr + dg * dg + db * db;
+            const dist = dr * dr + dg * dg + db * db;  // 距离平方
             
             if (dist < minDist) {
               minDist = dist;
@@ -525,7 +694,7 @@
           }
           
           index = bestIndex;
-          paletteMap.set(color, index);
+          paletteMap.set(color, index);  // 缓存结果
         }
         
         indexed.push(index);
@@ -826,61 +995,81 @@
       return indexed;
     }
 
-    // LZW压缩（参考高清版）
+    /**
+     * LZW（Lempel-Ziv-Welch）压缩算法
+     * GIF格式标准的图像数据压缩方法，将索引数据进一步压缩
+     * @param {Array} data - 索引颜色数据
+     * @returns {Array} 压缩后的字节数组
+     */
     function compressLZW(data) {
-      const clearCode = 256;
-      const endCode = 257;
-      let nextCode = 258;
-      let codeSize = 9;
+      // LZW压缩的特殊控制码
+      const clearCode = 256;  // 清除字典信号
+      const endCode = 257;    // 数据结束信号
+      let nextCode = 258;     // 下一个可用的字典代码
+      let codeSize = 9;       // 当前代码位数
       
-      const dictionary = new Map();
-      const result = [];
-      let bitBuffer = 0;
-      let bitCount = 0;
+      const dictionary = new Map();  // 字符串到代码的映射字典
+      const result = [];             // 输出的压缩数据
+      let bitBuffer = 0;             // 位缓冲区
+      let bitCount = 0;              // 缓冲区中的位数
       
-      // 初始化字典
+      // 初始化字典：0-255为基础字符
       for (let i = 0; i < 256; i++) {
         dictionary.set(i.toString(), i);
       }
       
+      /**
+       * 输出一个LZW代码到结果缓冲区
+       * @param {number} code - 要输出的代码值
+       */
       function outputCode(code) {
-        bitBuffer |= code << bitCount;
+        bitBuffer |= code << bitCount;  // 将代码添加到位缓冲区
         bitCount += codeSize;
         
+        // 当缓冲区有足够的位时，输出字节
         while (bitCount >= 8) {
-          result.push(bitBuffer & 0xFF);
-          bitBuffer >>= 8;
+          result.push(bitBuffer & 0xFF);  // 输出低8位
+          bitBuffer >>= 8;                // 右移8位
           bitCount -= 8;
         }
       }
       
+      // 开始压缩：输出清除代码
       outputCode(clearCode);
       
-      let w = data[0].toString();
+      // LZW主压缩循环
+      let w = data[0].toString();  // 当前字符串
       for (let i = 1; i < data.length; i++) {
-        const k = data[i].toString();
-        const wk = w + ',' + k;
+        const k = data[i].toString();    // 新字符
+        const wk = w + ',' + k;          // 扩展字符串
         
         if (dictionary.has(wk)) {
+          // 如果扩展字符串在字典中，继续扩展
           w = wk;
         } else {
+          // 输出当前字符串的代码
           outputCode(dictionary.get(w));
           
-          if (nextCode < 4096) {
+          // 将新字符串添加到字典（如果还有空间）
+          if (nextCode < 4096) {  // GIF格式限制最大代码数
             dictionary.set(wk, nextCode++);
+            
+            // 当字典大小超过当前代码位数时，增加位数
             if (nextCode > (1 << codeSize) && codeSize < 12) {
               codeSize++;
             }
           }
           
+          // 重新开始新的字符串
           w = k;
         }
       }
       
+      // 输出最后的字符串和结束代码
       outputCode(dictionary.get(w));
       outputCode(endCode);
       
-      // 输出剩余位
+      // 输出缓冲区中剩余的位
       if (bitCount > 0) {
         result.push(bitBuffer & 0xFF);
       }
@@ -888,12 +1077,24 @@
       return result;
     }
 
-    // 字符串转字节数组（参考高清版）
+    /**
+     * 将字符串转换为字节数组
+     * 用于将GIF文件头信息转换为二进制格式
+     * @param {string} str - 要转换的字符串
+     * @returns {Array} 字节数组
+     */
     function stringToBytes(str) {
       return Array.from(str).map(c => c.charCodeAt(0));
     }
 
-    // 测试功能
+    // ==================================================
+    // 测试功能 - 生成示例GIF验证系统功能
+    // ==================================================
+    
+    /**
+     * 测试GIF生成功能
+     * 创建一个包含复杂图形和动画的测试GIF，用于验证算法正确性
+     */
     async function testGif() {
       try {
         showStatus('🧪 生成高质量测试GIF...');
@@ -979,7 +1180,14 @@
       }
     }
 
-    // 起始时间变化时预览
+    // ==================================================
+    // 用户界面交互事件处理
+    // ==================================================
+    
+    /**
+     * 起始时间输入框变化时的实时预览
+     * 当用户调整起始时间时，视频会自动跳转到对应位置
+     */
     startTimeInput.addEventListener('input', () => {
       if (video.src && video.duration > 0) {
         const startTime = parseFloat(startTimeInput.value);
@@ -989,7 +1197,10 @@
       }
     });
 
-    // 页面加载完成
+    /**
+     * 页面加载完成后的初始化
+     * 显示就绪状态信息
+     */
     window.addEventListener('load', () => {
       setTimeout(() => {
         showStatus('✅ 高质量防失真GIF生成器已就绪！支持任意时间段提取！', 'success');
