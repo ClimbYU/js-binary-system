@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>前端文件生成与下载示例</title>
+  <style>
+    button { margin: 5px; padding: 8px 16px; }
+    textarea { width: 100%; height: 100px; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <h1>前端文件生成与下载</h1>
+  
+  <div>
+    <button id="downloadCsvBtn">下载 CSV 文件</button>
+    <button id="downloadJsonBtn">下载 JSON 文件</button>
+    <button id="downloadTextBtn">下载文本文件</button>
+  </div>
+  
+  <textarea id="fileContent" placeholder="输入自定义内容（可选）"></textarea>
+  
+  <script>
+    // 示例数据
+    const sampleData = {
+      csv: [
+        { name: '张三', age: 25, city: '北京' },
+        { name: '李四', age: 30, city: '上海' },
+        { name: '王五', age: 28, city: '广州' }
+      ],
+      json: {
+        title: '用户数据',
+        updated: new Date().toISOString(),
+        users: [
+          { id: 1, name: '张三', role: 'admin' },
+          { id: 2, name: '李四', role: 'user' }
+        ]
+      },
+      text: '这是一个由前端生成的文本文件示例。\n你可以在textarea中输入自定义内容。'
+    };
+    
+    // 下载 CSV 文件
+    document.getElementById('downloadCsvBtn').addEventListener('click', () => {
+      // 获取用户输入或使用默认数据
+      const content = document.getElementById('fileContent').value || 
+        // 构建 CSV 内容
+        '姓名,年龄,城市\n' + 
+        sampleData.csv.map(item => `${item.name},${item.age},${item.city}`).join('\n');
+      
+      downloadFile(content, 'text/csv', '用户数据.csv');
+    });
+    
+    // 下载 JSON 文件
+    document.getElementById('downloadJsonBtn').addEventListener('click', () => {
+      const content = document.getElementById('fileContent').value || 
+        JSON.stringify(sampleData.json, null, 2); // 格式化 JSON
+      
+      downloadFile(content, 'application/json', '用户数据.json');
+    });
+    
+    // 下载文本文件
+    document.getElementById('downloadTextBtn').addEventListener('click', () => {
+      const content = document.getElementById('fileContent').value || sampleData.text;
+      
+      downloadFile(content, 'text/plain', '示例文本.txt');
+    });
+    
+    // 核心下载函数
+    function downloadFile(content, mimeType, fileName) {
+      // 创建 Blob 对象
+      const blob = new Blob([content], { type: mimeType });
+      
+      // 生成临时 URL
+      const url = URL.createObjectURL(blob);
+      
+      // 创建下载链接并触发点击
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      
+      // 清理资源
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
